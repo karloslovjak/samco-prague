@@ -1,0 +1,22 @@
+SAMCO training copy
+
+This repository is a pruned copy of IBM/tobi-example (https://github.com/IBM/tobi-example),
+licensed under the Apache License, Version 2.0 (see LICENSE).
+The application is ARCAD Software's "SAMCO" sample.
+
+Copyright IBM Corporation and contributors.
+Portions copyright 1992,2015 ARCAD Software, as stated in the headers of the
+upstream sources (for example functionsVAT/vat300.rpgle). Those headers, including
+the trial-licence comment lines, are kept unchanged.
+
+Changes made to the upstream:
+- Removed: the globalization samples, the C and C++ sources, the sources in other languages,
+  the RPG/400 cycle programs (QRPGSRC), build files (Rules.mk, .ibmi.json, .vscode,
+  iproj.json), menus and help panels (QPNLSRC), the printer file and the print
+  command of the missing ORD500 program, and a few samples no slice uses
+  (ADDNUM, the CUST demo table and its SQL objects, a data queue source).
+- Source files are otherwise unchanged. Line endings were normalised to LF.
+- Added: README.md, NOTICE, docs/, data/.
+
+The files in data/ are invented for training. They contain no real people,
+companies or addresses. Any resemblance is accidental.
