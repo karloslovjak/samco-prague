@@ -1,0 +1,582 @@
+{
+  "slice": "ORD101",
+  "note": "No IBM i is available to this builder. Every expected value below is worked out by hand from QRPGLESRC/ORD101.PGM.RPGLE and functionsVAT/vat300.rpgle, applying packed-decimal truncation and %DECH half-adjust exactly as the source does. On a project with a live system these would instead be recorded runs. Run-dependent values (timestamps) are masked as \"<run-time>\".",
+  "rules_source": "docs/reverse/ORD101/rules.md",
+  "cases": [
+    {
+      "id": "C01",
+      "title": "Loading the line list sums stored totals, does not recompute VAT",
+      "rules": ["R1", "R2"],
+      "quirks": [],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:102-117"],
+      "inputs": {
+        "order": { "ORID": 60716, "ORYEAR": 2026, "ORCUID": 1001, "source": "seed data/ORDER.csv" },
+        "customer": { "CUID": 1001, "CUSTNM": "Demo Retail One", "source": "seed data/CUSTOMER.csv" },
+        "order_lines": [
+          { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 1, "ODARID": "000006", "ODQTY": 1, "ODQTYLIV": 0, "ODPRICE": 12.35, "ODTOT": 12.35, "ODTOTVAT": 12.35 },
+          { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 2, "ODARID": "000003", "ODQTY": 0, "ODQTYLIV": 0, "ODPRICE": 9.90, "ODTOT": 0.00, "ODTOTVAT": 0.00 },
+          { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 3, "ODARID": "000001", "ODQTY": 7, "ODQTYLIV": 0, "ODPRICE": 18.00, "ODTOT": 126.00, "ODTOTVAT": 126.00 },
+          { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 4, "ODARID": "000007", "ODQTY": 25, "ODQTYLIV": 0, "ODPRICE": 3.99, "ODTOT": 99.75, "ODTOTVAT": 99.75 }
+        ],
+        "article_desc": {
+          "000006": "Pocket cookbook",
+          "000003": "Desk stapler",
+          "000001": "Ballpoint pen, blue, box of 50",
+          "000007": "Garden gloves, size M"
+        },
+        "source": "all rows from seed data/DETORD.csv and data/ARTICLE.csv, order 60716 ('the best order to open in ORD101' per data/README.md)"
+      },
+      "steps": [
+        {
+          "action": "ORD101 entered with id=60716; panel 1 loads (s01prp clears totals, s01lod reads DETORD1 with SETLL/READE on key id and writes one SFL01 row per line)",
+          "expected": {
+            "header": { "ORID": 60716, "ORYEAR": 2026, "ORCUID": 1001, "CUSTNAME": "Demo Retail One" },
+            "subfile_rows": [
+              { "ODLINE": 1, "ODARID": "000006", "ARTDESC": "Pocket cookbook", "ODQTY": 1, "ODPRICE": 12.35, "ODTOT": 12.35 },
+              { "ODLINE": 2, "ODARID": "000003", "ARTDESC": "Desk stapler", "ODQTY": 0, "ODPRICE": 9.90, "ODTOT": 0.00 },
+              { "ODLINE": 3, "ODARID": "000001", "ARTDESC": "Ballpoint pen, blue, box of 50", "ODQTY": 7, "ODPRICE": 18.00, "ODTOT": 126.00 },
+              { "ODLINE": 4, "ODARID": "000007", "ARTDESC": "Garden gloves, size M", "ODQTY": 25, "ODPRICE": 3.99, "ODTOT": 99.75 }
+            ],
+            "TOT": 238.10,
+            "TOTVAT": 238.10
+          },
+          "derivation": "TOT = 12.35 + 0.00 + 126.00 + 99.75 = 238.10 (sum of ODTOT, line 108). TOTVAT = 12.35 + 0.00 + 126.00 + 99.75 = 238.10 (sum of ODTOTVAT, line 109) — identical to TOT here only because every seed ODTOTVAT still equals its ODTOT placeholder (no VAT has ever been applied through this program to these lines); R1 does not call ClcVAT at all while building this list. ARTDESC on each row is GetArtDesc(ODARID) looked up fresh (R2), not a stored field on DETORD; all four descriptions here are <=30 characters so none are truncated (compare case C17)."
+        }
+      ]
+    },
+    {
+      "id": "C02",
+      "title": "Invalid option on two rows: both flagged, only the first positioned to",
+      "rules": ["R3"],
+      "quirks": [],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:146-160", "QDDSSRC/ORD101D.DSPF:36"],
+      "inputs": {
+        "order": { "ORID": 60716, "ORYEAR": 2026, "ORCUID": 1001 },
+        "subfile_state": "list already loaded as in C01",
+        "ui_input": [
+          { "ODLINE": 3, "OPT01": 9 },
+          { "ODLINE": 4, "OPT01": 5 }
+        ]
+      },
+      "steps": [
+        {
+          "action": "Enter pressed; s01chk runs READC(E) over the two changed rows in ODLINE order",
+          "expected": {
+            "ODLINE_3": { "OPT01": 9, "dspatr_ri": true, "sflmsg_ind35": true, "cursor_positioned": true },
+            "ODLINE_4": { "OPT01": 5, "dspatr_ri": true, "sflmsg_ind35": true, "cursor_positioned": false },
+            "message": "Invalid Option",
+            "step01": "dsp",
+            "DETORD1_changed": false
+          },
+          "derivation": "Neither 9 nor 2/4/6/0 matches the allowed set, so both rows get indicator 34 (reverse image) and 35 ('Invalid Option', QDDSSRC/ORD101D.DSPF:36) turned on independently inside the READC(E) loop (lines 151-160). RRB01, which the control record uses to position the cursor, is set only once — guarded by `if not err01` (lines 156-159,165-168) — so only the first invalid row processed (ODLINE 3, since READE returns lines in ascending ODLINE order) gets `rrb01 = rrn01`; ODLINE 4 is still flagged but the cursor does not move to it. No DETORD1 record is touched — the loop only rewrites subfile display attributes (`update sfl01`, line 170)."
+        }
+      ]
+    },
+    {
+      "id": "C03",
+      "title": "Delete blocked when delivered quantity is above 0",
+      "rules": ["R4"],
+      "quirks": ["option 4 refused when delivered is above 0"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:161-169", "QDDSSRC/ORD101D.DSPF:37-38"],
+      "inputs": {
+        "order": { "ORID": 60715, "ORYEAR": 2026, "ORCUID": 1002 },
+        "order_lines": [
+          { "ODORID": 60715, "ODYEAR": 2026, "ODLINE": 1, "ODARID": "000001", "ODQTY": 20, "ODQTYLIV": 8, "ODPRICE": 18.00, "ODTOT": 360.00, "ODTOTVAT": 360.00 }
+        ],
+        "ui_input": [{ "ODLINE": 1, "OPT01": 4 }],
+        "source": "seed data/DETORD.csv (delivered above 0 but below ordered, per data/README.md)"
+      },
+      "steps": [
+        {
+          "action": "Enter pressed with option 4 on this row",
+          "expected": {
+            "ODLINE_1": { "dspatr_ri": true, "sflmsg2_ind36": true, "deleted": false, "ODQTY": 20, "ODQTYLIV": 8, "ODTOT": 360.00 },
+            "message": "Line with delivery can not be deleted.",
+            "step01": "dsp"
+          },
+          "derivation": "`if opt01 = 4 and odqtyliv > 0` (line 161) is true (8 > 0), so indicator 36 and reverse image turn on and the row is skipped in s01act — the record is never reached by the DELETE statement. ODQTYLIV being below ODQTY (8 < 20, not yet fully delivered) makes no difference: the check is only `> 0` (see case C20 for the equal-to-ordered boundary, which is blocked identically)."
+        }
+      ]
+    },
+    {
+      "id": "C04",
+      "title": "Option 4 deletes the line and adjusts order totals",
+      "rules": ["R6"],
+      "quirks": [],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:185-195"],
+      "inputs": {
+        "order": { "ORID": 60717, "ORYEAR": 2026, "ORCUID": 1003 },
+        "order_lines": [
+          { "ODORID": 60717, "ODYEAR": 2026, "ODLINE": 1, "ODARID": "000004", "ODQTY": 40, "ODQTYLIV": 0, "ODPRICE": 6.25, "ODTOT": 250.00, "ODTOTVAT": 250.00 },
+          { "ODORID": 60717, "ODYEAR": 2026, "ODLINE": 2, "ODARID": "000005", "ODQTY": 2, "ODQTYLIV": 0, "ODPRICE": 24.00, "ODTOT": 48.00, "ODTOTVAT": 48.00 },
+          { "ODORID": 60717, "ODYEAR": 2026, "ODLINE": 3, "ODARID": "000007", "ODQTY": 100, "ODQTYLIV": 0, "ODPRICE": 3.50, "ODTOT": 350.00, "ODTOTVAT": 350.00 }
+        ],
+        "initial_totals": { "TOT": 648.00, "TOTVAT": 648.00 },
+        "ui_input": [{ "ODLINE": 1, "OPT01": 4 }],
+        "source": "seed data/DETORD.csv, all three lines of order 60717"
+      },
+      "steps": [
+        {
+          "action": "Enter pressed with option 4 on ODLINE 1 (ODQTYLIV=0, so R4's block does not apply)",
+          "expected": {
+            "TOT": 398.00,
+            "TOTVAT": 398.00,
+            "DETORD1_60717_1": "deleted (no longer chainable on id:1)",
+            "subfile_row_ODLINE_1": { "OPT01": 0, "ODARID": "      ", "ODQTY": 0, "ODPRICE": 0.00, "ODTOT": 0.00, "ARTDESC": "**** Delete ***", "ODQTYLIV_hidden": 0, "ODTOTVAT_hidden": 250.00 }
+          },
+          "derivation": "TOT = 648.00 - 250.00 = 398.00, TOTVAT = 648.00 - 250.00 = 398.00 (line 186-187, subtracting the pre-delete ODTOT/ODTOTVAT of 250.00/250.00 from the running 648.00/648.00). `delete (id:odline) detord1` (line 188) removes the DETORD1 record. Lines 189-194 then zero ODARID/ODQTY/ODPRICE/ODTOT and set ARTDESC to the literal '**** Delete ***' before `update sfl01` redisplays the row — but ODQTYLIV and ODTOTVAT are never reset by this code, so the hidden fields (QDDSSRC/ORD101D.DSPF:23-24, both `H`) still carry their pre-delete values (0 and 250.00) in the subfile buffer, even though they are not shown on screen and the underlying record is gone."
+        }
+      ]
+    },
+    {
+      "id": "C05",
+      "title": "Opening a line for edit prices it fresh; the list total is not refreshed until a save",
+      "rules": ["R5", "R7"],
+      "quirks": ["List totals are not re-derived from current VAT rates"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:182-184,215-224,102-117"],
+      "inputs": {
+        "order": { "ORID": 60716, "ORYEAR": 2026, "ORCUID": 1001 },
+        "order_lines_as_in": "C01",
+        "vatdef": { "VATCODE": "2", "VATRATE": 7.70, "VATDESC": "Reduced rate", "VATDEL": "" },
+        "article": { "ARID": "000006", "ARDESC": "Pocket cookbook", "ARVATCD": "2" },
+        "ui_input": [{ "ODLINE": 1, "OPT01": 2 }]
+      },
+      "steps": [
+        {
+          "action": "Option 2 on ODLINE 1 of order 60716; panel switches to 2, S02prp runs: CHAIN (60716:1) DETORD1",
+          "expected": {
+            "DSQTY": 1, "DSQTYLIV": 0, "DSPRICE": 12.35,
+            "ARTDESC": "Pocket cookbook",
+            "VAT": 0.95, "ODTOTVAT_screen": 13.30, "VATRATE_screen": 7.70
+          },
+          "derivation": "GetArtVatCode('000006') = '2'. ClcVAT('2', 12.35): net*vatrate = 12.35*7.70 = 95.095 exactly (decimal arithmetic); /100 = 0.95095; assigned into the Packed(11:4) field this truncates (not rounds) to 0.9509 (the final '5' is dropped). %DECH(0.9509 : 9 : 2) half-adjusts on the 3rd decimal digit (0, <5) so it rounds down to 0.95. ODTOTVAT (screen only) = ODTOT(12.35) + VAT(0.95) = 13.30. VATRATE shown = GetVATRate('2') = 7.70. None of this is written back to DETORD1 — S02prp only loads and computes for display (R7); no UPDATE statement runs here."
+        },
+        {
+          "action": "User presses F3 (exit) without changing any field; panel returns to 1, step01 is still 'dsp' from before so the list is simply re-EXFMT'd, not reloaded by s01lod",
+          "expected": {
+            "TOT": 238.10,
+            "TOTVAT": 238.10
+          },
+          "derivation": "Because R7's recompute (13.30) was never saved (no UPDATE ran, and even an edit would have needed two clean Enters per R10), the on-disk DETORD1 record for line 1 still has ODTOTVAT = 12.35. The list's TOT/TOTVAT were accumulated once during s01lod (C01) from the stored values and are not recomputed on return to panel 1 — they remain 238.10/238.10, not 238.10 - 12.35 + 13.30 = 238.75/239.10. The order list never reflects a VAT rate unless the line is reopened and actually saved through FMT02."
+        }
+      ]
+    },
+    {
+      "id": "C06",
+      "title": "Quantity 0 line prices to 0 VAT without error",
+      "rules": ["R7"],
+      "quirks": ["quantity 0"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:215-224"],
+      "inputs": {
+        "order": { "ORID": 60716, "ORYEAR": 2026, "ORCUID": 1001 },
+        "order_lines": [
+          { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 2, "ODARID": "000003", "ODQTY": 0, "ODQTYLIV": 0, "ODPRICE": 9.90, "ODTOT": 0.00, "ODTOTVAT": 0.00 }
+        ],
+        "vatdef": { "VATCODE": "1", "VATRATE": 20.00 },
+        "article": { "ARID": "000003", "ARDESC": "Desk stapler", "ARVATCD": "1" },
+        "ui_input": [{ "ODLINE": 2, "OPT01": 2 }],
+        "source": "seed data/DETORD.csv (quantity 0, per data/README.md)"
+      },
+      "steps": [
+        {
+          "action": "Option 2 on ODLINE 2; S02prp runs",
+          "expected": {
+            "DSQTY": 0, "DSQTYLIV": 0, "DSPRICE": 9.90,
+            "ARTDESC": "Desk stapler",
+            "VAT": 0.00, "ODTOTVAT_screen": 0.00, "VATRATE_screen": 20.00
+          },
+          "derivation": "ODTOT on file is 0.00 (ODQTY 0 * ODPRICE 9.90, already computed when the seed line was created). ClcVAT('1', 0.00): 0.00*20.00 = 0.0000 exactly; /100 = 0.0000; truncation and %DECH both leave 0.00. ODTOTVAT = 0.00 + 0.00 = 0.00. No special-casing of quantity 0 exists anywhere in ClcVAT or ORD101 — it is simply ordinary arithmetic that happens to yield zero."
+        }
+      ]
+    },
+    {
+      "id": "C07",
+      "title": "ERR1001: new delivered quantity exceeds the old ordered quantity on file",
+      "rules": ["R8", "R9"],
+      "quirks": [],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:245-257", "QMSGSRC/SAMMSGF.MSGF"],
+      "inputs": {
+        "order": { "ORID": 60717, "ORYEAR": 2026, "ORCUID": 1003 },
+        "order_lines": [
+          { "ODORID": 60717, "ODYEAR": 2026, "ODLINE": 1, "ODARID": "000004", "ODQTY": 40, "ODQTYLIV": 0, "ODPRICE": 6.25, "ODTOT": 250.00, "ODTOTVAT": 250.00 }
+        ],
+        "vatdef": { "VATCODE": "2", "VATRATE": 7.70 },
+        "article": { "ARID": "000004", "ARVATCD": "2" },
+        "ui_input": [{ "ODLINE": 1, "DSQTY": 40, "DSQTYLIV": 45, "DSPRICE": 6.25 }]
+      },
+      "steps": [
+        {
+          "action": "In FMT02, user raises DSQTYLIV from 0 to 45 (DSQTY and DSPRICE left as loaded) and presses Enter",
+          "expected": {
+            "ErrQtyLiv_ind37": true,
+            "message_on_DSQTYLIV": "ERR1001: Delivered quantity must be lower or equal to ordered quantity.",
+            "step02": "dsp",
+            "ODTOT_screen": 250.00, "VAT_screen": 19.25, "ODTOTVAT_screen": 269.25,
+            "DETORD1_saved": false
+          },
+          "derivation": "Check 1 (line 247): DSQTYLIV(45) > ODQTY_old(40) -> true, so ErrQtyLiv (indicator 37) turns on and step02 is forced to 'dsp' — the record is not saved this round. R9 still runs unconditionally right after (lines 255-257): ODTOT = DSQTY(40) * DSPRICE(6.25) = 250.00 (unchanged, since neither qty nor price was altered); VAT = ClcVAT('2', 250.00): 250.00*7.70 = 1925.00 exactly; /100 = 19.2500, no truncation loss, %DECH leaves 19.25; ODTOTVAT = 250.00 + 19.25 = 269.25. The screen shows this recomputed total even though the line failed validation and was not written to DETORD1."
+        }
+      ]
+    },
+    {
+      "id": "C08",
+      "title": "ERR1002: new ordered quantity drops below the old delivered quantity on file",
+      "rules": ["R8", "R9"],
+      "quirks": [],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:245-257", "QMSGSRC/SAMMSGF.MSGF"],
+      "inputs": {
+        "order": { "ORID": 60715, "ORYEAR": 2026, "ORCUID": 1002 },
+        "order_lines": [
+          { "ODORID": 60715, "ODYEAR": 2026, "ODLINE": 1, "ODARID": "000001", "ODQTY": 20, "ODQTYLIV": 8, "ODPRICE": 18.00, "ODTOT": 360.00, "ODTOTVAT": 360.00 }
+        ],
+        "vatdef": { "VATCODE": "1", "VATRATE": 20.00 },
+        "article": { "ARID": "000001", "ARVATCD": "1" },
+        "ui_input": [{ "ODLINE": 1, "DSQTY": 5, "DSQTYLIV": 8, "DSPRICE": 18.00 }]
+      },
+      "steps": [
+        {
+          "action": "In FMT02, user lowers DSQTY from 20 to 5 (DSQTYLIV, DSPRICE left as loaded) and presses Enter",
+          "expected": {
+            "ErrQty_ind38": true,
+            "message_on_DSQTY": "ERR1002: Ordered quantity can not be lower that the quantity already delivered.",
+            "step02": "dsp",
+            "ODTOT_screen": 90.00, "VAT_screen": 18.00, "ODTOTVAT_screen": 108.00,
+            "DETORD1_saved": false
+          },
+          "derivation": "Check 1 (line 247): DSQTYLIV(8) > ODQTY_old(20) -> false, no ERR1001. Check 2 (line 251): DSQTY(5) < ODQTYLIV_old(8) -> true, so ErrQty (indicator 38) turns on and step02 = dsp. R9 reprices anyway: ODTOT = 5 * 18.00 = 90.00; VAT = ClcVAT('1', 90.00): 90.00*20.00 = 1800.0000; /100 = 18.0000, no truncation loss, %DECH leaves 18.00; ODTOTVAT = 90.00 + 18.00 = 108.00. Not saved."
+        }
+      ]
+    },
+    {
+      "id": "C09",
+      "title": "Error indicators are sticky: a later, valid screen still shows the earlier error",
+      "rules": [],
+      "quirks": ["Error indicators 37 (ErrQtyLiv) and 38 (ErrQty) are never turned off"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE (indicators declared 48-49, set 248,252, never cleared)"],
+      "inputs": {
+        "note": "Same ORD101 run (same job/activation group, *INLR never set) as C07 — the program-global indicator ErrQtyLiv (37) was switched on there and nothing in the source switches it back off.",
+        "second_line": { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 3, "ODARID": "000001", "ODQTY": 7, "ODQTYLIV": 0, "ODPRICE": 18.00, "ODTOT": 126.00, "ODTOTVAT": 126.00 },
+        "ui_input": [{ "ODLINE": 3, "DSQTY": 7, "DSQTYLIV": 0, "DSPRICE": 18.00 }]
+      },
+      "steps": [
+        {
+          "action": "After C07's failed Enter (ErrQtyLiv=*on), user backs out (F12/F3) to the list, opens a completely different, valid line (order 60716, line 3) with no delivered-quantity problem at all (DSQTYLIV left 0, well under ODQTY 7), and presses Enter",
+          "expected": {
+            "ErrQtyLiv_ind37": true,
+            "message_on_DSQTYLIV": "ERR1001: Delivered quantity must be lower or equal to ordered quantity.",
+            "this_passes_the_actual_check": true,
+            "step02": "act"
+          },
+          "derivation": "Check 1 for this line (DSQTYLIV 0 > ODQTY_old 7) is false, so S02chk itself does not set ErrQtyLiv this time and step02 correctly advances to 'act' (the line would go on to save normally, R10 permitting). But indicator 37 was already *on* from C07 and the source has no `errqtyliv = *off` anywhere, so the DDS (QDDSSRC/ORD101D.DSPF:117, `37 ERRMSGID(ERR1001 ... 37)`) keeps testing a still-on indicator and keeps showing the ERR1001 message next to DSQTYLIV on this and every later FMT02 display for the rest of the run, regardless of whether the current line's data actually has that problem."
+        }
+      ]
+    },
+    {
+      "id": "C10",
+      "title": "Quirk: the two checks compare against stale on-file values, not against each other's new value",
+      "rules": ["R8", "R9"],
+      "quirks": ["The quantity checks compare against stale, on-file values, not against each other's newly typed value"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:245-257"],
+      "inputs": {
+        "order": { "ORID": 60715, "ORYEAR": 2026, "ORCUID": 1002 },
+        "order_lines": [
+          { "ODORID": 60715, "ODYEAR": 2026, "ODLINE": 1, "ODARID": "000001", "ODQTY": 20, "ODQTYLIV": 8, "ODPRICE": 18.00, "ODTOT": 360.00, "ODTOTVAT": 360.00 }
+        ],
+        "vatdef": { "VATCODE": "1", "VATRATE": 20.00 },
+        "ui_input": [{ "ODLINE": 1, "DSQTY": 9, "DSQTYLIV": 15, "DSPRICE": 18.00 }]
+      },
+      "steps": [
+        {
+          "action": "User lowers DSQTY from 20 to 9 and simultaneously raises DSQTYLIV from 8 to 15 in the same Enter, so the new delivered (15) now exceeds the new ordered (9) — but both stay on the correct side of the OLD values",
+          "expected": {
+            "ErrQtyLiv_ind37": false,
+            "ErrQty_ind38": false,
+            "step02": "act",
+            "ODTOT_screen": 162.00, "VAT_screen": 32.40, "ODTOTVAT_screen": 194.40,
+            "validation_passes_despite_inconsistency": true
+          },
+          "derivation": "Check 1: DSQTYLIV(15) > ODQTY_old(20) -> false (15<20), no ERR1001. Check 2: DSQTY(9) < ODQTYLIV_old(8) -> false (9 is not less than 8), no ERR1002. Both checks pass even though the typed values describe an impossible state (15 delivered against 9 ordered) because neither check ever compares DSQTY to DSQTYLIV directly — both compare against the record still on disk. R9 reprices regardless: ODTOT = 9*18.00 = 162.00; VAT = ClcVAT('1',162.00): 162.00*20.00=3240.0000; /100=32.4000; %DECH leaves 32.40; ODTOTVAT = 162.00+32.40 = 194.40. If the user now presses Enter a second time unchanged (R10), DETORD1 is rewritten with ODQTY=9, ODQTYLIV=15 — an order line whose delivered quantity is persisted above its ordered quantity, with no rejection anywhere in this program."
+        }
+      ]
+    },
+    {
+      "id": "C11",
+      "title": "A changed line needs two unmodified Enters to save",
+      "rules": ["R10"],
+      "quirks": ["A changed line is not saved on the first Enter"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:260-273", "QDDSSRC/ORD101D.DSPF:92"],
+      "inputs": {
+        "order": { "ORID": 60716, "ORYEAR": 2026, "ORCUID": 1001 },
+        "order_lines": [
+          { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 3, "ODARID": "000001", "ODQTY": 7, "ODQTYLIV": 0, "ODPRICE": 18.00, "ODTOT": 126.00, "ODTOTVAT": 126.00 }
+        ],
+        "vatdef": { "VATCODE": "1", "VATRATE": 20.00 },
+        "ui_input_enter1": [{ "ODLINE": 3, "DSQTY": 10, "DSQTYLIV": 0, "DSPRICE": 18.00 }],
+        "ui_input_enter2": "same values, no further field changed"
+      },
+      "steps": [
+        {
+          "action": "First Enter: user raises DSQTY from 7 to 10. DDS field-level CHANGE tracking makes the record-level CHANGE indicator (27) come on because a field was altered since FMT02 was last shown",
+          "expected": {
+            "ErrQtyLiv_ind37": false, "ErrQty_ind38": false,
+            "ODTOT_screen": 180.00, "VAT_screen": 36.00, "ODTOTVAT_screen": 216.00,
+            "change_ind27": true,
+            "step02": "dsp",
+            "DETORD1_60716_3": { "ODQTY": 7, "ODTOT": 126.00, "ODTOTVAT": 126.00, "note": "unchanged on disk" }
+          },
+          "derivation": "S02chk: both checks false (DSQTYLIV 0 not > ODQTY_old 7; DSQTY 10 not < ODQTYLIV_old 0), so step02 would advance to 'act'. ODTOT=10*18.00=180.00; VAT=ClcVAT('1',180.00): 180*20=3600.0000, /100=36.0000, %DECH=36.00; ODTOTVAT=180.00+36.00=216.00. In S02act (line 261), `if change` (indicator 27, on because the user just edited DSQTY) is true, so step02 is forced back to 'dsp' instead of saving — the freshly computed 180.00/36.00/216.00 is shown on screen, but DETORD1 on disk still has the old ODQTY=7/ODTOT=126.00/ODTOTVAT=126.00."
+        },
+        {
+          "action": "Second Enter: user presses Enter again without changing any field this time, so CHANGE (27) is off",
+          "expected": {
+            "change_ind27": false,
+            "step02": "dsp->act->commit",
+            "DETORD1_60716_3": { "ODQTY": 10, "ODQTYLIV": 0, "ODPRICE": 18.00, "ODTOT": 180.00, "ODTOTVAT": 216.00 },
+            "panel": 1
+          },
+          "derivation": "S02chk runs again with the same typed values, same result (180.00/36.00/216.00), step02='act'. This time `if change` (line 261) is false, so the else branch (lines 264-273) runs: ODQTY=DSQTY(10), ODQTYLIV=DSQTYLIV(0), ODPRICE=DSPRICE(18.00); `update fdeto` rewrites the DETORD1 record (format FDETO) with ODTOT=180.00, ODTOTVAT=216.00 already set from the last S02chk; opt01 reset to 0; panel returns to 1, step01='dsp' — back to the line list."
+        }
+      ]
+    },
+    {
+      "id": "C12",
+      "title": "Half-up rounding of an exact half-cent VAT amount",
+      "rules": ["R11"],
+      "quirks": ["VAT rounding path: 0.065 rounds to 0.07, not banker's-rounds to 0.06"],
+      "citations": ["functionsVAT/vat300.rpgle:46-49"],
+      "inputs": {
+        "note": "Seed data has no VAT code/net combination that lands exactly on a half-cent before rounding, so this case adds its own fixture rows (not written back to data/, kept local to this case).",
+        "vatdef_added": { "VATCODE": "5", "VATRATE": 0.50, "VATDESC": "Half-cent test rate", "VATDEL": "" },
+        "article_added": { "ARID": "000012", "ARDESC": "Washer, M5, pack of 20", "ARVATCD": "5" },
+        "order": { "ORID": 60716, "ORYEAR": 2026, "ORCUID": 1001 },
+        "order_line_added": { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 5, "ODARID": "000012", "ODQTY": 1, "ODQTYLIV": 0, "ODPRICE": 13.00, "ODTOT": 13.00, "ODTOTVAT": 13.00 },
+        "ui_input": [{ "ODLINE": 5, "OPT01": 2 }]
+      },
+      "steps": [
+        {
+          "action": "Option 2 on the added ODLINE 5; S02prp runs",
+          "expected": {
+            "VAT": 0.07, "ODTOTVAT_screen": 13.07, "VATRATE_screen": 0.50
+          },
+          "derivation": "GetArtVatCode('000012') = '5'. ClcVAT('5', 13.00): net*vatrate = 13.00*0.50 = 6.5000 exactly; /100 = 0.065 exactly (no binary floating-point error — this is decimal arithmetic). Assigned into Packed(11:4): 0.0650 (nothing to truncate, the value only had 3 significant decimals). %DECH(0.0650 : 9 : 2) half-adjusts on the 3rd decimal digit, which is exactly 5, so it rounds UP (half-up, never half-even/banker's): tenths/hundredths go from 06 to 07, giving VAT=0.07. ODTOTVAT = 13.00+0.07 = 13.07. A naive 'round half to even' implementation would instead keep 0.06 (6 is already even) — a rebuild using that rounding mode would silently diverge from this program on every half-cent boundary."
+        }
+      ]
+    },
+    {
+      "id": "C13",
+      "title": "Unknown VAT code prices at 0%, no error",
+      "rules": ["R12"],
+      "quirks": ["Unknown VAT code silently prices at 0%"],
+      "citations": ["functionsVAT/vat300.rpgle:61-72"],
+      "inputs": {
+        "order": { "ORID": 60719, "ORYEAR": 2026, "ORCUID": 1002 },
+        "order_lines": [
+          { "ODORID": 60719, "ODYEAR": 2026, "ODLINE": 2, "ODARID": "000009", "ODQTY": 10, "ODQTYLIV": 0, "ODPRICE": 1.25, "ODTOT": 12.50, "ODTOTVAT": 12.50 }
+        ],
+        "article": { "ARID": "000009", "ARDESC": "Seed packet, mixed herbs", "ARVATCD": "9" },
+        "vatdef_state": "VATDEF has no row for code '9'",
+        "ui_input": [{ "ODLINE": 2, "OPT01": 2 }],
+        "source": "seed data/ARTICLE.csv + data/DETORD.csv (article on the VAT code that does not exist, per data/README.md)"
+      },
+      "steps": [
+        {
+          "action": "Option 2 on ODLINE 2; S02prp runs",
+          "expected": {
+            "ARTDESC": "Seed packet, mixed herbs",
+            "VAT": 0.00, "ODTOTVAT_screen": 12.50, "VATRATE_screen": 0.00
+          },
+          "derivation": "GetArtVatCode('000009') = '9'. chainVATDEF('9') first clears the whole VATDEF record buffer (`clear *all FVAT`), then CHAINs on '9' and fails (%found false) — the cleared (zero/blank) values are left in place, so VATRATE reads back as 0.00. GetVATRate('9') therefore returns 0.00, and ClcVAT('9', 12.50) = (12.50*0.00)/100 = 0.00. ODTOTVAT = 12.50+0.00 = 12.50. Nothing in ORD101 or VAT300 raises an error for this — the line simply prices at 0% silently."
+        }
+      ]
+    },
+    {
+      "id": "C14",
+      "title": "Deleted VAT code still prices normally",
+      "rules": ["R13"],
+      "quirks": ["Deleted VAT codes stay priceable"],
+      "citations": ["functionsVAT/vat300.rpgle:53-59"],
+      "inputs": {
+        "order": { "ORID": 60719, "ORYEAR": 2026, "ORCUID": 1002 },
+        "order_lines": [
+          { "ODORID": 60719, "ODYEAR": 2026, "ODLINE": 1, "ODARID": "000008", "ODQTY": 4, "ODQTYLIV": 0, "ODPRICE": 7.50, "ODTOT": 30.00, "ODTOTVAT": 30.00 }
+        ],
+        "article": { "ARID": "000008", "ARDESC": "Plant pot, 20 cm", "ARVATCD": "3" },
+        "vatdef": { "VATCODE": "3", "VATRATE": 10.00, "VATDESC": "Retired rate", "VATDEL": "X" },
+        "ui_input": [{ "ODLINE": 1, "OPT01": 2 }],
+        "source": "seed data/ARTICLE.csv + data/DETORD.csv + data/VATDEF.csv (article on the deleted VAT code, per data/README.md)"
+      },
+      "steps": [
+        {
+          "action": "Option 2 on ODLINE 1; S02prp runs",
+          "expected": {
+            "ARTDESC": "Plant pot, 20 cm",
+            "VAT": 3.00, "ODTOTVAT_screen": 33.00, "VATRATE_screen": 10.00
+          },
+          "derivation": "GetArtVatCode('000008') = '3'. GetVATRate('3') and ClcVAT('3', ...) never look at VATDEL (only ExistVATRate does, line 58), so they read VATRATE=10.00 from the found (deleted) row exactly as if it were active. ClcVAT('3', 30.00): 30.00*10.00=300.0000; /100=3.0000; %DECH=3.00. ODTOTVAT=30.00+3.00=33.00. (ExistVATRate('3') would in fact return *off here since it does check VATDEL — but ORD101 never calls ExistVATRate, so that check has no bearing on pricing or display.)"
+        }
+      ]
+    },
+    {
+      "id": "C15",
+      "title": "VATDEF lookups are cached by code, and the cache is cleared (not populated) on a miss",
+      "rules": ["R14"],
+      "quirks": ["The VATDEF lookup caches the last chained code in a static buffer, reset to blanks on every miss"],
+      "citations": ["functionsVAT/vat300.rpgle:61-72"],
+      "inputs": {
+        "vatdef": [
+          { "VATCODE": "1", "VATRATE": 20.00 },
+          { "VATCODE": "2", "VATRATE": 7.70 }
+        ],
+        "vatdef_state": "code '9' has no row",
+        "note": "Direct VAT300 calls, independent of ORD101 — isolates the chainVATDEF caching behaviour from any UI step."
+      },
+      "steps": [
+        { "action": "GetVATRate('1')", "expected": { "result": 20.00, "buffer_after": "VATCODE='1'" }, "derivation": "Buffer starts blank; blank<>'1' so chainVATDEF clears the buffer and CHAINs '1', finds it, buffer VATCODE becomes '1', VATRATE=20.00." },
+        { "action": "GetVATRate('1') again", "expected": { "result": 20.00, "buffer_after": "VATCODE='1' (unchanged, no re-chain)" }, "derivation": "P_VATCODE('1') = VATCODE buffer('1'), so the `if` at line 68 is false — no clear, no CHAIN. GetVATRate simply returns the still-buffered VATRATE, 20.00." },
+        { "action": "GetVATRate('2')", "expected": { "result": 7.70, "buffer_after": "VATCODE='2'" }, "derivation": "Buffer '1' <> '2', so it clears and re-chains on '2', finds it, VATRATE=7.70." },
+        { "action": "GetVATRate('9')", "expected": { "result": 0.00, "buffer_after": "VATCODE=blank (cleared, '9' never stored since the chain missed)" }, "derivation": "Buffer '2' <> '9', clears the buffer (VATCODE becomes blank as part of `clear *all FVAT`) and CHAINs '9' — not found, so the cleared/blank values are left as-is; VATCODE in the buffer is still blank, not '9'." },
+        { "action": "GetVATRate('9') again", "expected": { "result": 0.00, "buffer_after": "VATCODE=blank, re-cleared and re-chained again" }, "derivation": "Buffer is blank, blank<>'9', so it clears and CHAINs again even though the requested code hasn't changed — an invalid code is never actually cached, unlike a valid one in step 2. The result is still 0.00 either way, but every repeated call for the same unknown code redoes the full CHAIN." },
+        { "action": "GetVATRate('1') again", "expected": { "result": 20.00, "buffer_after": "VATCODE='1'" }, "derivation": "Buffer blank <> '1', clears and re-chains on '1', finds it again — unaffected by the intervening lookups for '2' and '9'." }
+      ]
+    },
+    {
+      "id": "C16",
+      "title": "Option 6 (Deliver) is accepted but does nothing",
+      "rules": [],
+      "quirks": ["Option 6 ('Deliver') is offered and accepted but never implemented"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:152,177-197", "QDDSSRC/ORD101D.DSPF:76"],
+      "inputs": {
+        "order": { "ORID": 60716, "ORYEAR": 2026, "ORCUID": 1001 },
+        "order_lines": [
+          { "ODORID": 60716, "ODYEAR": 2026, "ODLINE": 4, "ODARID": "000007", "ODQTY": 25, "ODQTYLIV": 0, "ODPRICE": 3.99, "ODTOT": 99.75, "ODTOTVAT": 99.75 }
+        ],
+        "ui_input": [{ "ODLINE": 4, "OPT01": 6 }]
+      },
+      "steps": [
+        {
+          "action": "Enter pressed with option 6 on this row",
+          "expected": {
+            "Invalid_option_message": false,
+            "DETORD1_60716_4": { "ODQTY": 25, "ODQTYLIV": 0, "ODPRICE": 3.99, "ODTOT": 99.75, "ODTOTVAT": 99.75, "note": "unchanged" },
+            "panel_change": false,
+            "error_message": "none"
+          },
+          "derivation": "6 is in the accepted set at line 152 (`opt01 <> 0 and <> 2 and <> 4 and <> 6`), so s01chk raises no 'Invalid Option'. In s01act (lines 177-197) the `select` only has `when opt01 = 2` and `when opt01 = 4` branches; 6 matches neither, so the select body does nothing — no delivery date is set, no quantity changes, no message, and the DETORD1 record is untouched. (The exact subfile read-cursor bookkeeping behind the screen is not re-derived here, matching the level of detail used by docs/reverse/ORD101/rules.md itself; what is certain and externally observable is that no data or screen state changes as a result of typing 6.)"
+        }
+      ]
+    },
+    {
+      "id": "C17",
+      "title": "A long article description is silently truncated to 30 characters on screen",
+      "rules": ["R2"],
+      "quirks": ["Article description is truncated from 50 to 30 characters on screen"],
+      "citations": ["QDDSSRC/ORD101D.DSPF:18,124", "QPROTOSRC/ARTICLE.RPGLEINC"],
+      "inputs": {
+        "note": "Seed article descriptions are all <=30 characters, so this case adds a fixture article with a longer one (kept local to this case, not written back to data/).",
+        "article_added": { "ARID": "000011", "ARDESC": "Mechanical pencil set, assorted colours", "ARVATCD": "1" },
+        "order": { "ORID": 60717, "ORYEAR": 2026, "ORCUID": 1003 },
+        "order_line_added": { "ODORID": 60717, "ODYEAR": 2026, "ODLINE": 4, "ODARID": "000011", "ODQTY": 2, "ODQTYLIV": 0, "ODPRICE": 5.00, "ODTOT": 10.00, "ODTOTVAT": 10.00 }
+      },
+      "steps": [
+        {
+          "action": "Order 60717's line list is loaded (s01lod) and includes the added ODLINE 4; the detail screen for it is also opened (S02prp)",
+          "expected": {
+            "GetArtDesc_full_result": "Mechanical pencil set, assorted colours",
+            "ARTDESC_on_subfile_row": "Mechanical pencil set, assorte",
+            "ARTDESC_on_FMT02": "Mechanical pencil set, assorte"
+          },
+          "derivation": "GetArtDesc returns the full char(50) ARDESC, here 'Mechanical pencil set, assorted colours' (39 characters). But `artdesc = GetArtDesc(odarid)` (lines 111, 220) assigns into the program's ARTDESC variable, which both the subfile row (QDDSSRC/ORD101D.DSPF:18, char 30) and the FMT02 field (line 124, char 30) share — a 39-character value truncates to its first 30 characters, 'Mechanical pencil set, assorte', with no error or warning. The last 9 characters ('d colours') are silently dropped on every screen that shows this line."
+        }
+      ]
+    },
+    {
+      "id": "C18",
+      "title": "Delivered quantity equal to ordered quantity: delete still blocked, edit validation sits exactly on the boundary",
+      "rules": ["R4", "R8"],
+      "quirks": ["delivered quantity equal to ordered"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:161-169,245-257"],
+      "inputs": {
+        "order": { "ORID": 60714, "ORYEAR": 2026, "ORCUID": 1001 },
+        "order_lines": [
+          { "ODORID": 60714, "ODYEAR": 2026, "ODLINE": 1, "ODARID": "000001", "ODQTY": 10, "ODQTYLIV": 10, "ODPRICE": 18.00, "ODTOT": 180.00, "ODTOTVAT": 180.00 }
+        ],
+        "vatdef": { "VATCODE": "1", "VATRATE": 20.00 },
+        "source": "seed data/DETORD.csv (delivered equal to ordered, per data/README.md); order 60714 is fully closed/delivered"
+      },
+      "steps": [
+        {
+          "action": "Part A — option 4 (delete) on this fully-delivered line",
+          "expected": { "dspatr_ri": true, "sflmsg2_ind36": true, "deleted": false },
+          "derivation": "`odqtyliv > 0` (line 161) is true (10 > 0) regardless of it being equal to ODQTY — the check has no special case for 'fully delivered', only 'any delivery at all' blocks the delete, exactly as in C03."
+        },
+        {
+          "action": "Part B — option 2 (edit), re-typing the same DSQTY=10 and DSQTYLIV=10 (i.e. at the boundary, not past it) and pressing Enter",
+          "expected": {
+            "ErrQtyLiv_ind37": false, "ErrQty_ind38": false,
+            "ODTOT_screen": 180.00, "VAT_screen": 36.00, "ODTOTVAT_screen": 216.00
+          },
+          "derivation": "Check 1: DSQTYLIV(10) > ODQTY_old(10) -> false (strict '>' excludes equality). Check 2: DSQTY(10) < ODQTYLIV_old(10) -> false (strict '<' excludes equality). Both pass at the exact boundary. ODTOT = 10*18.00 = 180.00 (same as before); VAT = ClcVAT('1',180.00) = 36.00 (as in C11) — note this is the first time VAT has actually been computed for this line; the stored seed ODTOTVAT (180.00) was a placeholder equal to ODTOT, so a genuine save here would change ODTOTVAT from 180.00 to 216.00 purely by going through the detail screen, with the typed quantities unchanged."
+        }
+      ]
+    },
+    {
+      "id": "C19",
+      "title": "RPGUnit fixture values (QTESTSRC/vat300.test.sqlrpgle), cited as true values",
+      "rules": ["R11", "R12", "R13"],
+      "quirks": ["the half-up rounding", "an unknown VAT code", "a deleted VAT code"],
+      "citations": ["QTESTSRC/vat300.test.sqlrpgle"],
+      "inputs": {
+        "note": "This test builds its OWN isolated VATDEF fixture (setUpSuite) containing only codes '1' and '3' — code '2' is deliberately absent so the test can exercise the 'unknown code' path, and it must NOT be read as a value for the seed data's own code '2' (7.70% in data/VATDEF.csv, a separate row this test never sees).",
+        "vatdef_fixture": [
+          { "VATCODE": "1", "VATRATE": 20.00, "VATDESC": "Valid Rate", "VATDEL": "" },
+          { "VATCODE": "3", "VATRATE": 10.00, "VATDESC": "Deleted Rate", "VATDEL": "X" }
+        ],
+        "net": 200.00
+      },
+      "steps": [
+        {
+          "action": "ClcVAT('1', 200.00) — test_ClcVAT",
+          "expected": { "result": 40.00 },
+          "derivation": "200.00*20.00=4000.0000; /100=40.0000; %DECH=40.00. Matches the test's literal assertion."
+        },
+        {
+          "action": "ClcVAT('2', 200.00) — test_ClcVAT, code '2' is unknown IN THIS FIXTURE",
+          "expected": { "result": 0.00 },
+          "derivation": "Code '2' has no row in this test's own VATDEF fixture (only '1' and '3' were inserted by setUpSuite) — chainVATDEF misses and clears, VATRATE reads 0.00, so ClcVAT returns 0.00. Matches the test's literal assertion. (This is unrelated to the main seed's VATDEF code '2', which is a real 7.70% row — see case C05.)"
+        },
+        {
+          "action": "ClcVAT('3', 200.00) — test_ClcVAT, deleted code",
+          "expected": { "result": 20.00 },
+          "derivation": "200.00*10.00=2000.0000; /100=20.0000; %DECH=20.00 — VATDEL='X' is ignored by ClcVAT, matching the test's literal assertion and case C14's general rule."
+        },
+        {
+          "action": "GetVATRate('1'), GetVATRate('2'), GetVATRate('3') — test_GetVATRate",
+          "expected": { "result_1": 20.00, "result_2": 0.00, "result_3": 10.00 },
+          "derivation": "Direct rate lookups on the same fixture; matches the test's literal assertions."
+        },
+        {
+          "action": "ExistVATRate('1'), ExistVATRate('2'), ExistVATRate('3') — test_ExistVATRate",
+          "expected": { "result_1": true, "result_2": false, "result_3": false },
+          "derivation": "ExistVATRate = %found(VATDEF) and VATDEL<>'X'. Code '1' found and not deleted -> true. Code '2' not found -> false. Code '3' found but VATDEL='X' -> false. Matches the test's literal assertions."
+        }
+      ]
+    },
+    {
+      "id": "C20",
+      "title": "Prtord (ORD500) is declared but never called",
+      "rules": [],
+      "quirks": ["Prtord (ORD500) is declared but never called in this program"],
+      "citations": ["QRPGLESRC/ORD101.PGM.RPGLE:24"],
+      "inputs": {
+        "note": "Static source fact, not input-dependent — included so a rebuild does not accidentally add a print call that the original never makes."
+      },
+      "steps": [
+        {
+          "action": "Any ORD101 session: load the list, edit a line, delete a line, exit",
+          "expected": { "Prtord_called": false },
+          "derivation": "`Prtord` is declared as a prototype to external program ORD500 at line 24 (`d Prtord pr extpgm('ORD500') ... d x like(orid)`) but there is no call site (`Prtord(...)`) anywhere else in the 288-line source. A faithful rebuild of ORD101 must not call anything resembling ORD500 printing logic — this program never does, no matter what option or data is used."
+        }
+      ]
+    }
+  ]
+}
